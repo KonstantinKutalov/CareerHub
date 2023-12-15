@@ -87,18 +87,18 @@ def extract_salary(salary_data):
         to_salary = salary_data['to']
         currency = salary_data['currency']
 
-        # Возвращаем кортеж из двух числовых значений (от и до зарплаты), если они указаны
+        # Возвращает кортеж из двух числовых значений (диапазон зарплаты), если они указаны
         return from_salary, to_salary
-    elif 'payment_from' in salary_data:
+    elif salary_data and 'payment_from' in salary_data:
         # Для SuperJob
         payment_from = salary_data['payment_from']
         payment_to = salary_data['payment_to']
         currency = salary_data['currency']
 
-        # Возвращаем кортеж из двух числовых значений (от и до зарплаты), если они указаны
+        # Возвращает кортеж из двух числовых значений (диапазон зарплаты), если они указаны
         return payment_from, payment_to
     else:
-        return None  # Если нет информации о зарплате
+        return None  # Если информация о зарплате недоступна
 
 
 def filter_vacancies(hh_vacancies, superjob_vacancies, filter_words):
@@ -153,7 +153,7 @@ def print_vacancies(top_vacancies):
         print(f"Вакансия {index}:")
         if 'profession' in vacancy:  # Проверка наличия поля для SuperJob
             print(f"Название: {vacancy.get('profession', 'Нет информации')}")
-            print(f"Город: {vacancy.get('town', 'Нет информации')}")
+            print(f"Город: {vacancy['town']['title'] if 'town' in vacancy else 'Нет информации'}")
             print(f"Работодатель: {vacancy.get('firm_name', 'Нет информации')}")
             client_info = vacancy.get('client', {})
             client_url = client_info.get('url', 'Нет информации') if 'url' in client_info else 'Нет информации'
@@ -170,9 +170,11 @@ def print_vacancies(top_vacancies):
                 print("Информация о зарплате отсутствует")
             # Вывод краткой информации
             candidate_info = vacancy.get('candidat', 'Нет информации')
-            candidate_info = candidate_info[:150] + f"{Fore.RED}...перейди по ссылке выше чтобы узнать больше{Style.RESET_ALL}" if len(candidate_info) > 120 else candidate_info
-            print(f"Информация по вакансии: {candidate_info}")
 
+            if candidate_info and len(candidate_info) > 120:
+                candidate_info = f"{candidate_info[:150]}{Fore.RED}...перейди по ссылке выше чтобы узнать больше{Style.RESET_ALL}"
+
+            print(f"Информация по вакансии: {candidate_info}")
 
         else:  # Для HeadHunter
             print(f"Название: {vacancy.get('name', 'Нет информации')}")
@@ -199,8 +201,12 @@ def print_vacancies(top_vacancies):
             print(salary_info)
             # Вывод краткой информации
             snippet_responsibility = vacancy.get('snippet', {}).get('responsibility', 'Нет информации')
-            snippet_responsibility = snippet_responsibility[:150] + f"{Fore.RED}...перейди по ссылке выше чтобы узнать больше{Style.RESET_ALL}" if len(
-                snippet_responsibility) > 120 else snippet_responsibility
+            if snippet_responsibility is not None:
+                snippet_responsibility = snippet_responsibility[
+                                         :150] + f"{Fore.RED}...перейди по ссылке выше чтобы узнать больше{Style.RESET_ALL}" if len(
+                    snippet_responsibility) > 120 else snippet_responsibility
+            else:
+                snippet_responsibility = "Нет информации"
             print(f"Информация по вакансии: {snippet_responsibility}")
 
         print("-----------------------------------------")
@@ -211,24 +217,32 @@ def get_top_vacancies(sorted_vacancies, top_n):
     return top_vacancies
 
 
-
 def sort_vacancies_by_salary(hh_vacancies, superjob_vacancies):
-    # Сортировка вакансий HeadHunter по зарплате (только от)
-    sorted_hh_vacancies = sorted(
-        [vacancy for vacancy in hh_vacancies if 'salary' in vacancy and vacancy['salary']['from'] is not None and vacancy['salary']['to'] is None],
-        key=lambda x: x['salary']['from'],
+    sorted_hh_from = sorted(
+        [vacancy for vacancy in hh_vacancies if vacancy.get('salary') and vacancy['salary'].get('from') is not None and vacancy['salary'].get('to') is None],
+        key=lambda x: x['salary']['from'] if x['salary'] and x['salary'].get('from') is not None else 0,
         reverse=True
     )
 
-    # Сортировка вакансий SuperJob по зарплате (только от)
-    sorted_superjob_vacancies = sorted(
-        [vacancy for vacancy in superjob_vacancies if 'payment_from' in vacancy and vacancy['payment_from'] is not None and vacancy['payment_to'] is None],
-        key=lambda x: x['payment_from'],
+    sorted_hh_to = sorted(
+        [vacancy for vacancy in hh_vacancies if vacancy.get('salary') and vacancy['salary'].get('to') is not None and vacancy['salary'].get('from') is None],
+        key=lambda x: x['salary']['to'] if x['salary'] and x['salary'].get('to') is not None else 0,
         reverse=True
     )
 
-    # Объединение отсортированных списков вакансий от HeadHunter и SuperJob
-    sorted_vacancies = sorted_hh_vacancies + sorted_superjob_vacancies
+    sorted_superjob_from = sorted(
+        [vacancy for vacancy in superjob_vacancies if vacancy.get('payment_from') and vacancy['payment_from'] is not None and vacancy['payment_to'] is None],
+        key=lambda x: x['payment_from'] if x.get('payment_from') is not None else 0,
+        reverse=True
+    )
+
+    sorted_superjob_to = sorted(
+        [vacancy for vacancy in superjob_vacancies if vacancy.get('payment_from') and vacancy.get('payment_to') and vacancy['payment_from'] is not None and vacancy['payment_to'] is not None],
+        key=lambda x: (x['payment_from'] + x['payment_to']) / 2 if x['payment_from'] is not None and x['payment_to'] is not None else 0,
+        reverse=True
+    )
+
+    sorted_vacancies = sorted_hh_from + sorted_hh_to + sorted_superjob_from + sorted_superjob_to
 
     return sorted_vacancies
 
@@ -238,24 +252,27 @@ def user_interaction():
     superjob_api = SuperJobAPI()
     json_saver = JSONSaver()
 
-    platform_choice = input("Введите платформу для поиска вакансий (HH или SuperJob): ").lower()
-    search_query = input("Введите поисковый запрос: ")
-    top_n = int(input("Введите количество вакансий для вывода в топ N: "))
-
     hh_vacancies = []
     superjob_vacancies = []
 
-    if platform_choice in ['hh', 'headhunter', 'хх', 'хедантер', "хэдхантер"]:  # Выбор HeadHunter
-        hh_vacancies = hh_api.get_vacancies(search_query)
-        if not hh_vacancies:
-            print("Нет вакансий на HeadHunter, соответствующих заданным критериям.")
-    elif platform_choice in ['superjob', 'sj', 'SuperJob', 'суперджоб', 'сд']:  # Выбор SuperJob
-        superjob_vacancies = superjob_api.get_vacancies(search_query)
-        if not superjob_vacancies:
-            print("Нет вакансий на SuperJob, соответствующих заданным критериям.")
-    else:
-        print("Выбранная платформа не поддерживается.")
-        return
+    while True:
+        platform_choice = input("Выберите платформу для поиска вакансий (HeadHunter или SuperJob): ").strip().lower()
+        if platform_choice in ['hh', 'headhunter', 'хх', 'хедантер', "хэдхантер"]:  # Выбор HeadHunter
+            search_query = input("Введите поисковый запрос: ")
+            hh_vacancies = hh_api.get_vacancies(search_query)
+            if not hh_vacancies:
+                print("Нет вакансий на HeadHunter, соответствующих заданным критериям.")
+            break
+        elif platform_choice in ['superjob', 'sj', 'superjob', 'суперджоб', 'сд']:  # Выбор SuperJob
+            search_query = input("Введите поисковый запрос: ")
+            superjob_vacancies = superjob_api.get_vacancies(search_query)
+            if not superjob_vacancies:
+                print("Нет вакансий на SuperJob, соответствующих заданным критериям.")
+            break
+        else:
+            print("Выбранная платформа не поддерживается. Пожалуйста, попробуйте ещё раз.")
+
+    top_n = int(input("Введите количество вакансий для вывода в топ N: "))
 
     json_saver.add_vacancy('hh_vacancies.json', hh_vacancies)
     json_saver.add_vacancy('superjob_vacancies.json', superjob_vacancies)
@@ -288,7 +305,3 @@ def user_interaction():
 
 if __name__ == "__main__":
     user_interaction()
-
-
-
-# Точка невозврата
